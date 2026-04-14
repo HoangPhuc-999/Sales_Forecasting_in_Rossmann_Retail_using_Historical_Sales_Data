@@ -1,0 +1,27 @@
+paths:
+  train_data: data/train.csv
+  store_data: data/store.csv
+  model_file: artifacts/models/rossmann_model.joblib
+  metrics_file: artifacts/metrics/metrics.json
+
+training:
+  validation_start_date: "2015-06-01"
+  n_estimators: 300
+  random_state: 42
+  n_jobs: -1
+
+serving:
+  host: "0.0.0.0"
+  port: 8000
+
+monitoring:
+  drift_alert_threshold: 0.3
+  rmse_alert_threshold: 4500.0
+  mae_alert_threshold: 3000.0
+  monitoring_report_file: logs/monitoring_report.jsonl
+  performance_log_file: logs/performance.jsonl
+  alert_file: logs/alerts.jsonl
+
+reproducibility:
+  seed: 42
+  experiment_log_file: logs/experiments.jsonl
