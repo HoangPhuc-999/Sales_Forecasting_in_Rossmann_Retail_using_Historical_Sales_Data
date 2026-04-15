@@ -1,0 +1,14 @@
+.git
+.github
+.dvc
+.dvcignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.ipynb
+notebooks
+logs
+artifacts

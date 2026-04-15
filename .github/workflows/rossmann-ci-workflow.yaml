@@ -1,0 +1,74 @@
+name: Rossmann CI Workflow
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: mlops-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-checks:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -e .[dev]
+
+      - name: Validate package import and config
+        run: |
+          python -c "import rossmann_mlops; from rossmann_mlops.config import load_config; print(rossmann_mlops.__version__); print(sorted(load_config().keys()))"
+
+      - name: Check syntax
+        run: |
+          python -m compileall src app scripts
+
+      - name: Run tests if present
+        run: |
+          if [ -d tests ] && [ "$(find tests -name 'test_*.py' | wc -l)" -gt 0 ]; then
+            pytest -q
+          else
+            echo "No tests found under tests/, skipping pytest."
+          fi
+
+  docker-build-smoke:
+    needs: quality-checks
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: rossmann-mlops:ci-${{ github.sha }}
+

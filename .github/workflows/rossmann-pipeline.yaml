@@ -1,0 +1,114 @@
+name: Rossmann Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 2 * * 1"
+
+concurrency:
+  group: rossmann-mlops-pipeline
+  cancel-in-progress: false
+
+jobs:
+  train-and-monitor:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      CONFIG_PATH: configs/config.yaml
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+          pip install dvc-s3
+
+      - name: Pull DVC data from S3 (optional)
+        if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
+        run: |
+          dvc pull data/train.csv data/store.csv data/test.csv
+
+      - name: Ensure required data files exist
+        run: |
+          test -f data/train.csv || (echo "Missing data/train.csv. Configure DVC access or commit sample data." && exit 1)
+          test -f data/store.csv || (echo "Missing data/store.csv. Configure DVC access or commit sample data." && exit 1)
+          test -f data/test.csv || (echo "Missing data/test.csv. Configure DVC access or commit sample data." && exit 1)
+
+      - name: Run training pipeline
+        run: |
+          python scripts/run_pipeline.py --config ${CONFIG_PATH}
+
+      - name: Run monitoring
+        run: |
+          python scripts/monitor.py --reference data/train.csv --current data/test.csv --config ${CONFIG_PATH}
+
+      - name: Upload model and logs artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rossmann-mlops-artifacts
+          path: |
+            artifacts/**
+            logs/**
+          if-no-files-found: warn
+
+  build-and-publish:
+    needs: train-and-monitor
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download training artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rossmann-mlops-artifacts
+          path: .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: ${{ vars.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: ${{ vars.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:latest
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:${{ github.sha }}
+
+      - name: Skip Docker push when credentials are missing
+        if: ${{ vars.DOCKERHUB_USERNAME == '' || secrets.DOCKERHUB_TOKEN == '' }}
+        run: |
+          echo "DOCKERHUB_USERNAME variable or DOCKERHUB_TOKEN secret is missing. Docker push skipped."
