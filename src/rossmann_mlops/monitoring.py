@@ -9,8 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from rossmann_mlops.config import load_config, resolve_path
-from rossmann_mlops.features import CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, build_features, merge_store_data
+from src.rossmann_mlops.config import load_config, resolve_path
+from src.rossmann_mlops.features import CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, build_features, merge_store_data
 
 
 @dataclass(frozen=True)

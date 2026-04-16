@@ -8,8 +8,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from rossmann_mlops.config import load_config
-from rossmann_mlops.predict import PredictionInputError, Predictor
+from src.rossmann_mlops.config import load_config
+from src.rossmann_mlops.predict import PredictionInputError, Predictor
 
 
 class PredictionRow(BaseModel):

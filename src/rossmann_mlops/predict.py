@@ -6,8 +6,8 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from rossmann_mlops.config import resolve_path
-from rossmann_mlops.features import build_features, merge_store_data
+from src.rossmann_mlops.config import resolve_path
+from src.rossmann_mlops.features import build_features, merge_store_data
 
 
 class PredictionInputError(ValueError):
