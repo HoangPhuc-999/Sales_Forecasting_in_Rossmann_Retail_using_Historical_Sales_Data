@@ -4,7 +4,7 @@ import argparse
 import json
 
 from rossmann_mlops.config import load_config
-from rossmann_mlops.train import train_pipeline
+from rossmann_mlops.train_model import train_pipeline
 
 
 def main() -> None:

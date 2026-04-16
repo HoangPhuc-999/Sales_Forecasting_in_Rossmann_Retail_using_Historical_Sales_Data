@@ -40,7 +40,95 @@ def get_model_instance(name, params):
     return model_map[name](**params)
 
 # -----------------------------
-# 3. Luồng xử lý chính
+# 3. Pipeline Function (for run_pipeline.py)
+# -----------------------------
+def train_pipeline(config):
+    """
+    Main training pipeline function that accepts config dict
+    """
+    # Extract config values with defaults
+    training_cfg = config.get('training', {})
+    paths_cfg = config.get('paths', {})
+    
+    model_name = 'XGBoost'
+    model_params = {
+        'n_estimators': training_cfg.get('n_estimators', 300),
+        'random_state': training_cfg.get('random_state', 42),
+    }
+    
+    train_data_path = paths_cfg.get('train_data', 'data/train.csv')
+    store_data_path = paths_cfg.get('store_data', 'data/store.csv')
+    model_save_path = paths_cfg.get('model_file', 'artifacts/models/rossmann_model.joblib')
+    models_dir = os.path.dirname(model_save_path)
+
+    # Setup MLflow
+    mlflow_uri = os.environ.get('MLFLOW_TRACKING_URI', 'http://127.0.0.1:5000')
+    if mlflow_uri:
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("Rossmann_Final_Training")
+
+    # Load data
+    logger.info(f"Đang tải dữ liệu từ: {train_data_path}")
+    try:
+        df = pd.read_csv(train_data_path)
+    except FileNotFoundError:
+        logger.error(f"File not found: {train_data_path}")
+        return {'status': 'error', 'message': f'File not found: {train_data_path}'}
+    
+    # Time-based split (assuming columns exist)
+    if 'Year' in df.columns and 'WeekOfYear' in df.columns:
+        val_condition = (df['Year'] == 2015) & (df['WeekOfYear'] >= 26)
+    else:
+        # Fallback to simple split if columns don't exist
+        val_condition = df.index >= int(len(df) * 0.8)
+    
+    train_df = df[~val_condition].copy()
+    val_df = df[val_condition].copy()
+
+    # Tách feature/target
+    drop_cols = ['Sales', 'Sales_log', 'Customers']
+    X_train = train_df.drop(columns=[c for c in drop_cols if c in train_df.columns], errors='ignore')
+    y_train = train_df['Sales'] if 'Sales' in train_df.columns else train_df.iloc[:, -1]
+    
+    X_val = val_df.drop(columns=[c for c in drop_cols if c in val_df.columns], errors='ignore')
+    y_val_orig = val_df['Sales'] if 'Sales' in val_df.columns else val_df.iloc[:, -1]
+
+    # Get model
+    model = get_model_instance(model_name, model_params)
+
+    # Training with MLflow
+    try:
+        with mlflow.start_run(run_name="final_production_training"):
+            logger.info(f"🚀 Đang huấn luyện: {model_name}")
+            model.fit(X_train, y_train)
+            
+            # Predict & Calculate RMSPE
+            y_pred = model.predict(X_val)
+            val_rmspe = float(rmspe(y_val_orig, y_pred)) if len(y_val_orig) > 0 else 0.0
+
+            # Log metrics
+            mlflow.log_params(model_params)
+            mlflow.log_metric('val_rmspe', val_rmspe)
+
+            # Save model locally
+            os.makedirs(models_dir, exist_ok=True)
+            joblib.dump(model, model_save_path)
+            
+            result = {
+                'status': 'success',
+                'model_path': model_save_path,
+                'val_rmspe': val_rmspe,
+                'message': f"Model trained and saved: {model_save_path}"
+            }
+            
+            logger.info(f"✅ Hoàn tất! RMSPE: {val_rmspe:.4f}")
+            return result
+    except Exception as e:
+        logger.error(f"Training failed: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
+
+# -----------------------------
+# 4. Luồng xử lý chính
 # -----------------------------
 def main(args):
     # Load config
