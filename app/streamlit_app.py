@@ -240,7 +240,7 @@ if page == "🏠  Dashboard":
     with col1:
         st.markdown(
             '<div class="metric-card"><div class="label">Model</div>'
-            '<div class="value">LightGBM</div></div>',
+            '<div class="value">RandomForest</div></div>',
             unsafe_allow_html=True,
         )
     with col2:
@@ -270,7 +270,7 @@ if page == "🏠  Dashboard":
 
             | Component | Technology |
             |-----------|------------|
-            | Model | LightGBM / XGBoost / CatBoost |
+            | Model | RandomForestRegressor |
             | Serving | FastAPI + Uvicorn |
             | UI | Streamlit |
             | Tracking | MLflow |

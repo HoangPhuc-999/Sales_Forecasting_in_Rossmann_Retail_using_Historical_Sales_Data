@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from rossmann_mlops.config import load_config
-from rossmann_mlops.train_model import train_pipeline
+from src.rossmann_mlops.config import load_config
+from src.rossmann_mlops.train_model import train_pipeline
 
 
 def main() -> None:

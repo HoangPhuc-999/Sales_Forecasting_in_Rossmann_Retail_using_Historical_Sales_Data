@@ -54,18 +54,18 @@ jobs:
       - name: Pull DVC data from S3 (optional)
         if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
         run: |
-          dvc pull data/train.csv data/store.csv data/test.csv
+          dvc pull data/raw/train.csv data/raw/store.csv data/raw/test.csv
 
       - name: Ensure required data files exist
         run: |
-          test -f data/train.csv || (echo "Missing data/train.csv. Configure DVC access or commit sample data." && exit 1)
-          test -f data/store.csv || (echo "Missing data/store.csv. Configure DVC access or commit sample data." && exit 1)
-          test -f data/test.csv || (echo "Missing data/test.csv. Configure DVC access or commit sample data." && exit 1)
+          test -f data/raw/train.csv || (echo "Missing data/raw/train.csv. Configure DVC access or commit sample data." && exit 1)
+          test -f data/raw/store.csv || (echo "Missing data/raw/store.csv. Configure DVC access or commit sample data." && exit 1)
+          test -f data/raw/test.csv || (echo "Missing data/raw/test.csv. Configure DVC access or commit sample data." && exit 1)
 
       - name: Generate data hash for artifact naming
         id: data-hash
         run: |
-          HASH=$(cat data/train.csv data/store.csv data/test.csv | md5sum | cut -d' ' -f1 | head -c 8)
+          HASH=$(cat data/raw/train.csv data/raw/store.csv data/raw/test.csv | md5sum | cut -d' ' -f1 | head -c 8)
           echo "hash=$HASH" >> $GITHUB_OUTPUT
 
       - name: Upload data artifacts
@@ -73,9 +73,9 @@ jobs:
         with:
           name: processed-data-${{ steps.data-hash.outputs.hash }}
           path: |
-            data/train.csv
-            data/store.csv
-            data/test.csv
+            data/raw/train.csv
+            data/raw/store.csv
+            data/raw/test.csv
           retention-days: 1
 
   # Job 2: Model Training - Train model using processed data
@@ -110,7 +110,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: processed-data-${{ needs.data-processing.outputs.data-hash }}
-          path: data/
+          path: .
 
       - name: Create artifact directories
         run: |
@@ -166,7 +166,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: processed-data-${{ needs.data-processing.outputs.data-hash }}
-          path: data/
+          path: .
 
       - name: Download model artifacts
         uses: actions/download-artifact@v4
@@ -187,7 +187,7 @@ jobs:
       - name: Run monitoring with MLflow logging
         continue-on-error: true
         run: |
-          python scripts/monitor.py --reference data/train.csv --current data/test.csv --config ${CONFIG_PATH}
+          python scripts/monitor.py --reference data/raw/train.csv --current data/raw/test.csv --config ${CONFIG_PATH}
 
       - name: Upload monitoring and evaluation results
         uses: actions/upload-artifact@v4

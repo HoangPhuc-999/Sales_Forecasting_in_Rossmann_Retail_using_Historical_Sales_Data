@@ -1,4 +1,4 @@
-name: Rossmann MLOps CI
+name: Rossmann Streamlit App
 
 on:
   push:

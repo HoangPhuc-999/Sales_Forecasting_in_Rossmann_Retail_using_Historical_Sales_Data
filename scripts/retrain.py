@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from rossmann_mlops.monitoring import retrain_from_config
+from src.rossmann_mlops.monitoring import retrain_from_config
 
 
 def main() -> None:

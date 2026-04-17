@@ -42,15 +42,44 @@ EXPECTED_REQUEST_COLUMNS = [
     "SchoolHoliday",
 ]
 
+STORE_DEFAULTS: dict[str, Any] = {
+    "StoreType": "a",
+    "Assortment": "a",
+    "CompetitionDistance": 0.0,
+    "Promo2": 0,
+    "Promo2SinceWeek": 0,
+    "Promo2SinceYear": 0,
+    "CompetitionOpenSinceMonth": 0,
+    "CompetitionOpenSinceYear": 0,
+    "PromoInterval": "None",
+}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _serialize_report(report: MonitoringReport) -> dict[str, Any]:
+    return {
+        "timestamp": report.timestamp,
+        "drift": [result.__dict__ for result in report.drift],
+        "performance": report.performance,
+        "alert": report.alert,
+    }
 
 
 def _ensure_required_columns(df: pd.DataFrame, required_columns: list[str], source_name: str) -> None:
     missing = [column for column in required_columns if column not in df.columns]
     if missing:
         raise MonitoringError(f"Missing required columns in {source_name}: {missing}")
+
+
+def _ensure_columns(frame: pd.DataFrame, defaults: dict[str, Any]) -> pd.DataFrame:
+    updated = frame.copy()
+    for column, default_value in defaults.items():
+        if column not in updated.columns:
+            updated[column] = default_value
+    return updated
 
 
 def _psi_from_distributions(reference: pd.Series, current: pd.Series, buckets: int = 10) -> float:
@@ -105,17 +134,9 @@ def detect_data_drift(
         _ensure_required_columns(store_df, ["Store", "StoreType", "Assortment", "CompetitionDistance", "Promo2"], "store data")
         reference_augmented = merge_store_data(reference_augmented, store_df)
         current_augmented = merge_store_data(current_augmented, store_df)
-    else:
-        _ensure_required_columns(
-            reference_augmented,
-            ["StoreType", "Assortment", "CompetitionDistance", "Promo2"],
-            "reference data",
-        )
-        _ensure_required_columns(
-            current_augmented,
-            ["StoreType", "Assortment", "CompetitionDistance", "Promo2"],
-            "current data",
-        )
+
+    reference_augmented = _ensure_columns(reference_augmented, STORE_DEFAULTS)
+    current_augmented = _ensure_columns(current_augmented, STORE_DEFAULTS)
 
     reference_features = build_features(reference_augmented.assign(StateHoliday=reference_augmented["StateHoliday"].astype(str)))
     current_features = build_features(current_augmented.assign(StateHoliday=current_augmented["StateHoliday"].astype(str)))
@@ -218,12 +239,7 @@ def run_monitoring(
 
     report_path = log_jsonl(
         thresholds.get("monitoring_report_file", "logs/monitoring_report.jsonl"),
-        {
-            "timestamp": report.timestamp,
-            "drift": [result.__dict__ for result in report.drift],
-            "performance": report.performance,
-            "alert": report.alert,
-        },
+        _serialize_report(report),
     )
 
     if alert:
