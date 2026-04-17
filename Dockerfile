@@ -9,8 +9,8 @@ ENV PIP_NO_CACHE_DIR=1 \
 WORKDIR /install
 
 # Copy requirements trước để tận dụng Docker layer cache
-COPY requirements-api.txt .
-RUN pip install --prefix=/install --no-cache-dir -r requirements-api.txt
+COPY requirements.txt .
+RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # ──────────────────────────────────────────────
 # Stage 2: api — image chạy FastAPI (nhỏ gọn)
@@ -19,10 +19,6 @@ FROM python:3.11-slim AS api
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-
-# curl dùng cho HEALTHCHECK
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -39,7 +35,7 @@ RUN mkdir -p artifacts/models artifacts/metrics logs data
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
@@ -53,15 +49,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements-streamlit.txt .
-RUN pip install --no-cache-dir -r requirements-streamlit.txt
+COPY --from=builder /install /usr/local
 
 COPY app/streamlit_app.py ./app/streamlit_app.py
 
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)"
 
 CMD ["streamlit", "run", "app/streamlit_app.py", \
      "--server.port=8501", \

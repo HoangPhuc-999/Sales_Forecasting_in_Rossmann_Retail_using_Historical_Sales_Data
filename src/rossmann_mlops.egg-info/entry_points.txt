@@ -1,2 +1,0 @@
-[console_scripts]
-run-pipeline = rossmann_mlops.train_model:main

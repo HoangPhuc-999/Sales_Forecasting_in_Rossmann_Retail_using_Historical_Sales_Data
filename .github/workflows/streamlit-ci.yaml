@@ -8,7 +8,7 @@ on:
       - 'configs/**'
       - 'requirements.txt'
       - 'Dockerfile'
-      - 'docker-compose.yml'
+      - 'docker-compose.yaml'
   workflow_dispatch:
 
 jobs:
@@ -29,12 +29,30 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push API image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
+          target: api
           push: true
-          tags: docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:latest
+          tags: |
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:latest
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Streamlit image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          target: streamlit
+          push: true
+          tags: |
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:latest
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max

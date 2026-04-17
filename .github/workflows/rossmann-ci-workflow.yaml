@@ -67,14 +67,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image (Multi-platform - no push)
+      - name: Build API image (Multi-platform - no push)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
+          target: api
           push: false
           platforms: linux/amd64,linux/arm64
-          tags: rossmann-mlops:ci-${{ github.sha }}
+          tags: rossmann-mlops-api:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Streamlit image (Multi-platform - no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: streamlit
+          push: false
+          platforms: linux/amd64,linux/arm64
+          tags: rossmann-mlops-streamlit:ci-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

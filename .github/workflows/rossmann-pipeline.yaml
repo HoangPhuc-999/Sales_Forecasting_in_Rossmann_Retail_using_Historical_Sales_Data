@@ -248,33 +248,67 @@ jobs:
           echo "version=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
           echo "git-sha=${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Build and push Docker image (Multi-platform)
+      - name: Build and push API image (Multi-platform)
         if: ${{ env.HAS_DOCKER_TOKEN == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
+          target: api
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           tags: |
-            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:latest
-            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:${{ github.sha }}
-            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops:${{ steps.meta.outputs.version }}
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:latest
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:${{ github.sha }}
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Push to GitHub Container Registry (Multi-platform)
+      - name: Build and push Streamlit image (Multi-platform)
+        if: ${{ env.HAS_DOCKER_TOKEN == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: streamlit
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: |
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:latest
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:${{ github.sha }}
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push API image to GitHub Container Registry (Multi-platform)
         if: ${{ env.HAS_GH_TOKEN == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
+          target: api
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository }}-api:latest
+            ghcr.io/${{ github.repository }}-api:${{ github.sha }}
+            ghcr.io/${{ github.repository }}-api:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push Streamlit image to GitHub Container Registry (Multi-platform)
+        if: ${{ env.HAS_GH_TOKEN == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: streamlit
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: |
+            ghcr.io/${{ github.repository }}-streamlit:latest
+            ghcr.io/${{ github.repository }}-streamlit:${{ github.sha }}
+            ghcr.io/${{ github.repository }}-streamlit:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
