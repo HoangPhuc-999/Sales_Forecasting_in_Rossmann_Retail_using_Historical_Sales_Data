@@ -112,6 +112,18 @@ jobs:
           name: processed-data-${{ needs.data-processing.outputs.data-hash }}
           path: .
 
+      - name: Normalize downloaded data layout
+        run: |
+          mkdir -p data/raw
+          [ -f train.csv ] && [ ! -f data/raw/train.csv ] && mv train.csv data/raw/train.csv || true
+          [ -f store.csv ] && [ ! -f data/raw/store.csv ] && mv store.csv data/raw/store.csv || true
+          [ -f test.csv ] && [ ! -f data/raw/test.csv ] && mv test.csv data/raw/test.csv || true
+
+      - name: Ensure training data files exist
+        run: |
+          test -f data/raw/train.csv || (echo "Missing data/raw/train.csv after artifact download" && exit 1)
+          test -f data/raw/store.csv || (echo "Missing data/raw/store.csv after artifact download" && exit 1)
+
       - name: Create artifact directories
         run: |
           mkdir -p artifacts/models artifacts/metrics
@@ -166,6 +178,18 @@ jobs:
         with:
           name: processed-data-${{ needs.data-processing.outputs.data-hash }}
           path: .
+
+      - name: Normalize downloaded data layout
+        run: |
+          mkdir -p data/raw
+          [ -f train.csv ] && [ ! -f data/raw/train.csv ] && mv train.csv data/raw/train.csv || true
+          [ -f store.csv ] && [ ! -f data/raw/store.csv ] && mv store.csv data/raw/store.csv || true
+          [ -f test.csv ] && [ ! -f data/raw/test.csv ] && mv test.csv data/raw/test.csv || true
+
+      - name: Ensure monitoring data files exist
+        run: |
+          test -f data/raw/train.csv || (echo "Missing data/raw/train.csv after artifact download" && exit 1)
+          test -f data/raw/test.csv || (echo "Missing data/raw/test.csv after artifact download" && exit 1)
 
       - name: Download model artifacts
         uses: actions/download-artifact@v4
