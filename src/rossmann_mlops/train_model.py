@@ -175,6 +175,26 @@ def _compact_model_params(params: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _prepare_xgb_inputs(x_train: pd.DataFrame, x_val: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Ensure XGBoost-compatible numeric dtypes with stable encoding across splits."""
+    prepared_train = x_train.copy()
+    prepared_val = x_val.copy()
+
+    categorical_cols = prepared_train.select_dtypes(include=["object", "category"]).columns.tolist()
+    for column in categorical_cols:
+        # Normalize to string to avoid mixed-type category issues (e.g., int + str) in XGBoost.
+        train_values = prepared_train[column].astype(str)
+        val_values = prepared_val[column].astype(str)
+
+        categories = pd.Index(train_values.unique())
+        mapping = {value: idx for idx, value in enumerate(categories)}
+
+        prepared_train[column] = train_values.map(mapping).fillna(-1).astype(np.int32)
+        prepared_val[column] = val_values.map(mapping).fillna(-1).astype(np.int32)
+
+    return prepared_train, prepared_val
+
+
 def _resolve_model_config_output_path(
     *,
     paths: dict[str, Any],
@@ -242,6 +262,7 @@ def train_pipeline(config: dict[str, Any]) -> dict[str, Any]:
     drop_cols = ["Sales", "Sales_log", "Customers", "Month", "Promo2", "Date", "Id"]
     x_train = train_df.drop(columns=drop_cols, errors="ignore")
     x_val = val_df.drop(columns=drop_cols, errors="ignore")
+    x_train, x_val = _prepare_xgb_inputs(x_train, x_val)
 
     y_train = train_df["Sales_log"].astype(float)
     y_val = val_df["Sales_log"].astype(float)
