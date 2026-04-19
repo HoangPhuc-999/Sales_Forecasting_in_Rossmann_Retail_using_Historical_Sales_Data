@@ -88,6 +88,9 @@ jobs:
 
     outputs:
       model-version: ${{ steps.train.outputs.model-version }}
+      should-promote: ${{ steps.promotion-gate.outputs.should-promote }}
+      promotion-reason: ${{ steps.promotion-gate.outputs.promotion-reason }}
+      promotion-metric: ${{ steps.promotion-gate.outputs.promotion-metric }}
 
     steps:
       - name: Checkout repository
@@ -129,6 +132,15 @@ jobs:
           mkdir -p artifacts/models artifacts/metrics
           mkdir -p mlruns
 
+      - name: Capture baseline metrics before training
+        run: |
+          if [ -f artifacts/metrics/metrics.json ]; then
+            cp artifacts/metrics/metrics.json artifacts/metrics/metrics_baseline.json
+            echo "Baseline metrics captured"
+          else
+            echo "No baseline metrics found. First promotion will be allowed."
+          fi
+
       - name: Run training pipeline with MLflow tracking
         id: train
         run: |
@@ -137,6 +149,62 @@ jobs:
           # Extract model version from MLflow or artifacts
           MODEL_VERSION=$(date +%s)
           echo "model-version=$MODEL_VERSION" >> $GITHUB_OUTPUT
+
+          - name: Evaluate quality gate for model promotion
+          id: promotion-gate
+          run: |
+            python - <<'PY'
+            import json
+            import os
+            from pathlib import Path
+
+            candidate_path = Path("artifacts/metrics/metrics.json")
+            baseline_path = Path("artifacts/metrics/metrics_baseline.json")
+
+            if not candidate_path.exists():
+              raise SystemExit(f"Candidate metrics not found: {candidate_path}")
+
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            baseline = None
+            if baseline_path.exists():
+              baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+
+            chosen_metric = None
+            for metric_name in ("val_rmspe", "rmse"):
+              if metric_name in candidate and (baseline is None or metric_name in baseline):
+                chosen_metric = metric_name
+                break
+
+            if chosen_metric is None:
+              if baseline is None:
+                should_promote = True
+                reason = "no_baseline_metrics"
+                chosen_metric = "none"
+              else:
+                should_promote = False
+                reason = "missing_comparable_metric"
+                chosen_metric = "none"
+            elif baseline is None:
+              should_promote = True
+              reason = f"no_baseline_{chosen_metric}"
+            else:
+              candidate_value = float(candidate[chosen_metric])
+              baseline_value = float(baseline[chosen_metric])
+              should_promote = candidate_value < baseline_value
+              if should_promote:
+                reason = f"improved_{chosen_metric}:{candidate_value:.6f}<{baseline_value:.6f}"
+              else:
+                reason = f"not_improved_{chosen_metric}:{candidate_value:.6f}>={baseline_value:.6f}"
+
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              out.write(f"should-promote={'true' if should_promote else 'false'}\n")
+              out.write(f"promotion-reason={reason}\n")
+              out.write(f"promotion-metric={chosen_metric}\n")
+
+            print(f"should_promote={should_promote}")
+            print(f"reason={reason}")
+            print(f"metric={chosen_metric}")
+            PY
 
       - name: Upload model artifacts
         uses: actions/upload-artifact@v4
@@ -152,6 +220,12 @@ jobs:
   monitoring-and-evaluation:
     needs: [data-processing, model-training]
     runs-on: ubuntu-latest
+
+    outputs:
+      should-retrain: ${{ steps.retrain-gate.outputs.should-retrain }}
+      retrain-reason: ${{ steps.retrain-gate.outputs.retrain-reason }}
+      severe-drift-count: ${{ steps.retrain-gate.outputs.severe-drift-count }}
+      rmse-exceeds-threshold: ${{ steps.retrain-gate.outputs.rmse-exceeds-threshold }}
 
     permissions:
       contents: read
@@ -210,6 +284,61 @@ jobs:
         run: |
           python scripts/monitor.py --reference data/raw/train.csv --current data/raw/test.csv --config ${CONFIG_PATH}
 
+      - name: Evaluate retrain gate from monitoring report
+        id: retrain-gate
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          config_path = Path(os.environ.get("CONFIG_PATH", "configs/config.yaml"))
+          with config_path.open("r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+
+          monitoring_cfg = config.get("monitoring", {})
+          rmse_threshold = float(monitoring_cfg.get("rmse_alert_threshold", float("inf")))
+          report_file = Path(monitoring_cfg.get("monitoring_report_file", "logs/monitoring_report.jsonl"))
+
+          if not report_file.exists():
+            raise SystemExit(f"Monitoring report not found: {report_file}")
+
+          lines = [line for line in report_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+          if not lines:
+            raise SystemExit(f"Monitoring report is empty: {report_file}")
+
+          report = json.loads(lines[-1])
+          drift_results = report.get("drift", [])
+          severe_drift_count = sum(1 for item in drift_results if item.get("status") == "severe_drift")
+
+          performance = report.get("performance", {})
+          rmse_value = performance.get("rmse")
+          rmse_exceeds = rmse_value is not None and float(rmse_value) > rmse_threshold
+
+          should_retrain = severe_drift_count > 0 or rmse_exceeds
+
+          reasons = []
+          if severe_drift_count > 0:
+            reasons.append(f"severe_drift_columns={severe_drift_count}")
+          if rmse_exceeds:
+            reasons.append(f"rmse={float(rmse_value):.4f}>{rmse_threshold:.4f}")
+          if report.get("alert"):
+            reasons.append("alert_logged=true")
+
+          reason_text = "; ".join(reasons) if reasons else "none"
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+            out.write(f"should-retrain={'true' if should_retrain else 'false'}\n")
+            out.write(f"retrain-reason={reason_text}\n")
+            out.write(f"severe-drift-count={severe_drift_count}\n")
+            out.write(f"rmse-exceeds-threshold={'true' if rmse_exceeds else 'false'}\n")
+
+          print(f"should_retrain={should_retrain}")
+          print(f"reason={reason_text}")
+          PY
+
       - name: Upload monitoring and evaluation results
         uses: actions/upload-artifact@v4
         with:
@@ -220,11 +349,68 @@ jobs:
             mlruns/**
           retention-days: 30
 
-  # Job 4: Build and Publish Docker image (Multi-platform)
-  build-and-publish:
-    needs: monitoring-and-evaluation
+  # Job 4: Controlled auto-retraining - runs only when drift/performance gate is triggered
+  controlled-auto-retrain:
+    needs: [data-processing, monitoring-and-evaluation]
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && vars.AUTO_RETRAIN_ENABLED == 'true' && needs.monitoring-and-evaluation.outputs.should-retrain == 'true' }}
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Download processed data
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-data-${{ needs.data-processing.outputs.data-hash }}
+          path: .
+
+      - name: Normalize downloaded data layout
+        run: |
+          mkdir -p data/raw
+          [ -f train.csv ] && [ ! -f data/raw/train.csv ] && mv train.csv data/raw/train.csv || true
+          [ -f store.csv ] && [ ! -f data/raw/store.csv ] && mv store.csv data/raw/store.csv || true
+          [ -f test.csv ] && [ ! -f data/raw/test.csv ] && mv test.csv data/raw/test.csv || true
+
+      - name: Log retrain trigger reason
+        run: |
+          echo "Auto-retrain gate passed"
+          echo "Reason: ${{ needs.monitoring-and-evaluation.outputs.retrain-reason }}"
+
+      - name: Run controlled retraining
+        run: |
+          python scripts/retrain.py --config ${CONFIG_PATH}
+
+      - name: Upload retraining artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrain-results-${{ github.sha }}
+          path: |
+            artifacts/**
+            logs/**
+            mlruns/**
+          retention-days: 30
+
+  # Job 5: Build and Publish Docker image (Multi-platform)
+  build-and-publish:
+    needs: [monitoring-and-evaluation, model-training]
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' && needs.model-training.outputs.should-promote == 'true' }}
 
     permissions:
       contents: read
@@ -237,6 +423,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Log promotion decision
+        run: |
+          echo "Promotion gate passed"
+          echo "Metric: ${{ needs.model-training.outputs.promotion-metric }}"
+          echo "Reason: ${{ needs.model-training.outputs.promotion-reason }}"
 
       - name: Download monitoring results
         uses: actions/download-artifact@v4
