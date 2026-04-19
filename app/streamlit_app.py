@@ -151,6 +151,24 @@ inject_css()
 DAY_LABELS = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 HOLIDAY_OPTS = {"None (0)": "0", "Public holiday (a)": "a", "Easter (b)": "b", "Christmas (c)": "c"}
 
+# Test data date range – restrict all predictions to this window
+TEST_DATE_MIN = date(2015, 8, 1)
+TEST_DATE_MAX = date(2015, 9, 17)
+
+
+@st.cache_data
+def load_holiday_lookup() -> dict:
+    """Try to load holiday info from the processed test CSV (DVC-tracked).
+    Returns empty dict when the file has not been pulled yet."""
+    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "test_final.csv")
+    try:
+        df = pd.read_csv(data_path, usecols=["Date", "StateHoliday", "SchoolHoliday"])
+        df = df.drop_duplicates("Date").set_index("Date")
+        df["StateHoliday"] = df["StateHoliday"].astype(str).replace({"nan": "0"})
+        return df[["StateHoliday", "SchoolHoliday"]].to_dict("index")
+    except Exception:
+        return {}
+
 
 def api_health() -> bool:
     try:
@@ -284,7 +302,14 @@ if page == "🏠  Dashboard":
         st.markdown("Generate a sample weekly forecast for any store.")
 
         demo_store = st.number_input("Store ID", min_value=1, max_value=1115, value=1, key="demo_store")
-        demo_start = st.date_input("Week starting", value=date(2015, 9, 14), key="demo_date")
+        demo_start = st.date_input(
+            "Week starting",
+            value=date(2015, 9, 11),
+            min_value=TEST_DATE_MIN,
+            max_value=date(2015, 9, 11),  # cap so the 7-day window stays within test period
+            help=f"Demo window is 7 days; capped so all days fall within {TEST_DATE_MIN} – {TEST_DATE_MAX}.",
+            key="demo_date",
+        )
 
         if st.button("Run Demo Forecast"):
             if not healthy:
@@ -331,17 +356,28 @@ if page == "🏠  Dashboard":
 elif page == "🔮  Single Prediction":
     st.markdown('<div class="section-title">🔮 Single Store Prediction</div>', unsafe_allow_html=True)
 
+    holiday_lookup = load_holiday_lookup()
+
+    st.info(
+        "ℹ️ **Open** status is auto-determined by day of week (Sunday = Closed). "
+        "**State Holiday** and **School Holiday** are looked up from historical calendar data "
+        "and are not user-configurable — they reflect actual calendar events. "
+        f"Predictions are restricted to the test period: **{TEST_DATE_MIN}** – **{TEST_DATE_MAX}**."
+    )
+
     with st.form("single_form"):
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
             store = st.number_input("Store ID", min_value=1, max_value=1115, value=1)
-            pred_date = st.date_input("Date", value=date(2015, 9, 14))
+            pred_date = st.date_input(
+                "Date",
+                value=date(2015, 9, 14),
+                min_value=TEST_DATE_MIN,
+                max_value=TEST_DATE_MAX,
+                help=f"Only dates within the test period ({TEST_DATE_MIN} – {TEST_DATE_MAX}) are valid.",
+            )
         with c2:
-            open_ = st.selectbox("Open", [1, 0], format_func=lambda x: "Yes" if x else "No")
             promo = st.selectbox("Promo", [1, 0], format_func=lambda x: "Active" if x else "Inactive")
-        with c3:
-            state_holiday_label = st.selectbox("State Holiday", list(HOLIDAY_OPTS.keys()))
-            school_holiday = st.selectbox("School Holiday", [0, 1], format_func=lambda x: "Yes" if x else "No")
 
         submitted = st.form_submit_button("Predict Sales →", use_container_width=True)
 
@@ -350,13 +386,23 @@ elif page == "🔮  Single Prediction":
             st.warning("API is offline. Please start the API service.")
         else:
             day_of_week = pred_date.isoweekday()
+
+            # Auto-derive Open: most stores are closed on Sundays
+            open_ = 0 if day_of_week == 7 else 1
+
+            # Auto-derive holidays from historical data lookup
+            date_str = pred_date.isoformat()
+            holiday_info = holiday_lookup.get(date_str, {})
+            state_holiday = str(holiday_info.get("StateHoliday", "0"))
+            school_holiday = int(holiday_info.get("SchoolHoliday", 0))
+
             record = {
                 "Store": store,
                 "DayOfWeek": day_of_week,
-                "Date": pred_date.isoformat(),
+                "Date": date_str,
                 "Open": open_,
                 "Promo": promo,
-                "StateHoliday": HOLIDAY_OPTS[state_holiday_label],
+                "StateHoliday": state_holiday,
                 "SchoolHoliday": school_holiday,
             }
             with st.spinner("Running prediction…"):
@@ -377,16 +423,19 @@ elif page == "🔮  Single Prediction":
                     )
                 with info_col:
                     st.markdown('<div class="section-title">Input Summary</div>', unsafe_allow_html=True)
+                    sh_label = {
+                        "0": "None", "a": "Public Holiday", "b": "Easter", "c": "Christmas"
+                    }.get(state_holiday, state_holiday)
                     summary = pd.DataFrame(
                         {
-                            "Field": ["Store", "Date", "Day of Week", "Open", "Promo", "State Holiday", "School Holiday"],
+                            "Field": ["Store", "Date", "Day of Week", "Open (auto)", "Promo", "State Holiday (auto)", "School Holiday (auto)"],
                             "Value": [
                                 store,
                                 pred_date.strftime("%d %b %Y"),
                                 DAY_LABELS[day_of_week],
-                                "Yes" if open_ else "No",
+                                "No – Sunday" if day_of_week == 7 else "Yes",
                                 "Active" if promo else "Inactive",
-                                state_holiday_label,
+                                sh_label,
                                 "Yes" if school_holiday else "No",
                             ],
                         }
@@ -451,9 +500,19 @@ elif page == "📦  Batch Prediction":
             g1, g2, g3 = st.columns(3)
             with g1:
                 g_stores = st.text_input("Store IDs (comma-separated)", value="1,2,3")
-                g_start = st.date_input("Start Date", value=date(2015, 9, 1))
+                g_start = st.date_input(
+                    "Start Date",
+                    value=date(2015, 9, 1),
+                    min_value=TEST_DATE_MIN,
+                    max_value=TEST_DATE_MAX,
+                )
             with g2:
-                g_end = st.date_input("End Date", value=date(2015, 9, 14))
+                g_end = st.date_input(
+                    "End Date",
+                    value=date(2015, 9, 14),
+                    min_value=TEST_DATE_MIN,
+                    max_value=TEST_DATE_MAX,
+                )
                 g_open = st.selectbox("Open", [1, 0], format_func=lambda x: "Yes" if x else "No")
             with g3:
                 g_promo = st.selectbox("Promo", [1, 0], format_func=lambda x: "Active" if x else "Inactive")

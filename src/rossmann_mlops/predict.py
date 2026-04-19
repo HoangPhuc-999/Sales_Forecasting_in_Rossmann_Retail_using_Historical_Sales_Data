@@ -96,8 +96,16 @@ class Predictor:
             raise PredictionInputError("Invalid Date value in request records")
 
         merged = merge_store_data(frame, self.store_df)
+
+        # Save Open before build_features drops it; model was trained with Open included
+        open_values = merged["Open"].values.copy() if "Open" in merged.columns else None
+
         features = build_features(merged)
         features = self._apply_mappings(features)
+
+        # Restore Open (build_features drops it but the trained model requires it)
+        if open_values is not None:
+            features["Open"] = open_values
 
         cols_to_drop = ["Sales", "Sales_log", "Customers", "Month", "Promo2", "Date", "Id"]
         features = features.drop(columns=[col for col in cols_to_drop if col in features.columns], errors="ignore")
