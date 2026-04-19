@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rossmann-streamlit
+  namespace: rossmann
+  labels:
+    app: rossmann-streamlit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rossmann-streamlit
+  template:
+    metadata:
+      labels:
+        app: rossmann-streamlit
+    spec:
+      containers:
+        - name: streamlit
+          image: sales_forecasting_in_rossmann_retail_using_historical_sales_data-streamlit:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+              name: http
+          env:
+            - name: API_URL
+              value: http://rossmann-api:8000
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rossmann-streamlit
+  namespace: rossmann
+spec:
+  selector:
+    app: rossmann-streamlit
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
+      nodePort: 30501
+  type: NodePort

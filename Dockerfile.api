@@ -18,7 +18,8 @@ RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 FROM python:3.11-slim AS api
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
 
 WORKDIR /app
 
@@ -29,6 +30,8 @@ COPY --from=builder /install /usr/local
 COPY configs ./configs
 COPY src     ./src
 COPY app/main.py ./app/main.py
+COPY artifacts/models ./artifacts/models
+COPY data/raw/store.csv ./data/raw/store.csv
 
 RUN mkdir -p artifacts/models artifacts/metrics logs data
 
@@ -38,27 +41,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# ──────────────────────────────────────────────
-# Stage 3: streamlit — image chạy Streamlit UI
-# ──────────────────────────────────────────────
-FROM python:3.11-slim AS streamlit
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-WORKDIR /app
-
-COPY --from=builder /install /usr/local
-
-COPY app/streamlit_app.py ./app/streamlit_app.py
-
-EXPOSE 8501
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)"
-
-CMD ["streamlit", "run", "app/streamlit_app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true"]

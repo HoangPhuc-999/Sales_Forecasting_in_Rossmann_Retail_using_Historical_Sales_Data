@@ -11,4 +11,14 @@ __pycache__
 *.ipynb
 notebooks
 logs
-artifacts
+artifacts/*
+!artifacts/models/
+!artifacts/models/rossmann_model.joblib
+!artifacts/models/store_dw_promo_mapping.pkl
+!artifacts/models/month_mapping.pkl
+!artifacts/models/global_mean_sales.pkl
+!artifacts/models/model_config_candidate.yaml
+
+data/*
+!data/raw/
+!data/raw/store.csv

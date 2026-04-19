@@ -8,8 +8,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - artifacts:/app/artifacts
-      - logs:/app/logs
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
       - ./data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
@@ -34,6 +34,3 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-volumes:
-  artifacts:
-  logs:
