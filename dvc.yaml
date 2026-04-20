@@ -14,9 +14,42 @@ stages:
           - paths.train_data
           - paths.store_data
           - paths.model_file
+          - paths.metrics_file
+          - paths.model_config_file
+          - paths.model_config_candidate_file
+          - training.production_train
           - training.n_estimators
           - training.random_state
           - training.n_jobs
     outs:
       - artifacts/models/rossmann_model.joblib
+      - artifacts/models/store_dw_promo_mapping.pkl
+      - artifacts/models/month_mapping.pkl
+      - artifacts/models/global_mean_sales.pkl
+      - artifacts/models/model_config_candidate.yaml
       - artifacts/metrics/metrics.json
+
+  monitor:
+    cmd: python scripts/monitor.py --config configs/config.yaml
+    deps:
+      - scripts/monitor.py
+      - configs/config.yaml
+      - src/rossmann_mlops/config.py
+      - src/rossmann_mlops/features.py
+      - src/rossmann_mlops/monitoring.py
+      - data/raw/train.csv
+      - data/raw/test.csv
+      - data/raw/store.csv
+      - artifacts/metrics/metrics.json
+    params:
+      - configs/config.yaml:
+          - monitoring.drift_alert_threshold
+          - monitoring.rmse_alert_threshold
+          - monitoring.mae_alert_threshold
+          - monitoring.monitoring_report_file
+          - monitoring.alert_file
+          - paths.metrics_file
+          - paths.store_data
+    outs:
+      - logs/monitoring_report.jsonl
+      - logs/alerts.jsonl
