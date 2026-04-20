@@ -353,7 +353,7 @@ jobs:
   controlled-auto-retrain:
     needs: [data-processing, monitoring-and-evaluation]
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' && vars.AUTO_RETRAIN_ENABLED == 'true' && needs.monitoring-and-evaluation.outputs.should-retrain == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && needs.monitoring-and-evaluation.outputs.should-retrain == 'true' && vars.AUTO_RETRAIN_ENABLED != 'false' }}
 
     permissions:
       contents: read
@@ -408,7 +408,7 @@ jobs:
 
   # Job 5: Build and Publish Docker image (Multi-platform)
   build-and-publish:
-    needs: [monitoring-and-evaluation, model-training]
+    needs: [data-processing, monitoring-and-evaluation, model-training]
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'pull_request' && needs.model-training.outputs.should-promote == 'true' }}
 
