@@ -158,32 +158,14 @@ TEST_DATE_MAX = date(2015, 9, 17)
 
 @st.cache_data
 def load_holiday_lookup() -> dict:
-    """Load Open/StateHoliday/SchoolHoliday from the processed test CSV keyed by (Store, Date).
-    Falls back to date-only lookup for StateHoliday/SchoolHoliday when Store not found.
+    """Try to load holiday info from the processed test CSV (DVC-tracked).
     Returns empty dict when the file has not been pulled yet."""
-    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "test.csv")
+    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "test_final.csv")
     try:
-        df = pd.read_csv(data_path, usecols=["Store", "Date", "Open", "StateHoliday", "SchoolHoliday"])
+        df = pd.read_csv(data_path, usecols=["Date", "StateHoliday", "SchoolHoliday"])
+        df = df.drop_duplicates("Date").set_index("Date")
         df["StateHoliday"] = df["StateHoliday"].astype(str).replace({"nan": "0"})
-        # Normalize Date to YYYY-MM-DD string regardless of CSV format
-        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-        df["Store"] = df["Store"].astype(int)
-        # Open có NaN trong Kaggle test (store đóng cửa không có doanh số) → fill 0
-        df["Open"] = df["Open"].fillna(1).astype(int)
-        df["SchoolHoliday"] = df["SchoolHoliday"].fillna(0).astype(int)
-        # Primary lookup: (Store, Date) → full info including Open
-        # Use itertuples to ensure Python native int keys (avoid numpy.int64 mismatch)
-        store_date = {
-            (int(row.Store), str(row.Date)): {
-                "Open": int(row.Open),
-                "StateHoliday": str(row.StateHoliday),
-                "SchoolHoliday": int(row.SchoolHoliday),
-            }
-            for row in df.itertuples(index=False)
-        }
-        # Fallback lookup: Date → holiday info (date-level, deduplicated)
-        date_only = df.drop_duplicates("Date").set_index("Date")[["StateHoliday", "SchoolHoliday"]]
-        return {"store_date": store_date, "date_only": date_only.to_dict("index")}
+        return df[["StateHoliday", "SchoolHoliday"]].to_dict("index")
     except Exception:
         return {}
 
@@ -333,41 +315,21 @@ if page == "🏠  Dashboard":
             if not healthy:
                 st.warning("API is offline. Start the API service first.")
             else:
-                demo_lookup = load_holiday_lookup()
-                demo_store_key = int(demo_store)
-                demo_sdlookup = demo_lookup.get("store_date", {})
-                demo_datelookup = demo_lookup.get("date_only", {})
-
-                records = []
-                for i in range(7):
-                    d = demo_start + timedelta(days=i)
-                    d_str = d.isoformat()
-                    dow = d.isoweekday()
-                    s_info = demo_sdlookup.get((demo_store_key, d_str), {})
-                    d_info = demo_datelookup.get(d_str, {})
-                    if s_info:
-                        open_ = int(s_info.get("Open", 1))
-                        sh = str(s_info.get("StateHoliday", "0"))
-                        sch = int(s_info.get("SchoolHoliday", 0))
-                    else:
-                        open_ = 1
-                        sh = str(d_info.get("StateHoliday", "0"))
-                        sch = int(d_info.get("SchoolHoliday", 0))
-                    records.append({
-                        "Store": demo_store_key,
-                        "DayOfWeek": dow,
-                        "Date": d_str,
-                        "Open": open_,
+                records = [
+                    {
+                        "Store": demo_store,
+                        "DayOfWeek": i + 1,
+                        "Date": (demo_start + timedelta(days=i)).isoformat(),
+                        "Open": 1,
                         "Promo": 1 if i < 5 else 0,
-                        "StateHoliday": sh,
-                        "SchoolHoliday": sch,
-                    })
-
+                        "StateHoliday": "0",
+                        "SchoolHoliday": 0,
+                    }
+                    for i in range(7)
+                ]
                 with st.spinner("Forecasting…"):
                     preds = call_predict(records)
                 if preds:
-                    # Stores closed (Open=0) → force 0 in chart
-                    preds = [p if records[i]["Open"] == 1 else 0.0 for i, p in enumerate(preds)]
                     days = [(demo_start + timedelta(days=i)).isoformat() for i in range(7)]
                     df_demo = pd.DataFrame({"Date": days, "Predicted Sales (€)": preds})
                     fig = go.Figure()
@@ -397,8 +359,9 @@ elif page == "🔮  Single Prediction":
     holiday_lookup = load_holiday_lookup()
 
     st.info(
-        "ℹ️ **Open** status is looked up from actual test data per store and date (some stores open on Sundays). "
-        "**State Holiday** and **School Holiday** are also looked up from historical calendar data. "
+        "ℹ️ **Open** status is auto-determined by day of week (Sunday = Closed). "
+        "**State Holiday** and **School Holiday** are looked up from historical calendar data "
+        "and are not user-configurable — they reflect actual calendar events. "
         f"Predictions are restricted to the test period: **{TEST_DATE_MIN}** – **{TEST_DATE_MAX}**."
     )
 
@@ -423,28 +386,18 @@ elif page == "🔮  Single Prediction":
             st.warning("API is offline. Please start the API service.")
         else:
             day_of_week = pred_date.isoweekday()
+
+            # Auto-derive Open: most stores are closed on Sundays
+            open_ = 0 if day_of_week == 7 else 1
+
+            # Auto-derive holidays from historical data lookup
             date_str = pred_date.isoformat()
-
-            # Look up per-store Open status from actual test data
-            # Cast store to int: st.number_input returns float (e.g. 1.0) which won't match int key
-            store_key = int(store)
-            store_date_lookup = holiday_lookup.get("store_date", {})
-            date_only_lookup = holiday_lookup.get("date_only", {})
-            store_info = store_date_lookup.get((store_key, date_str), {})
-            date_info = date_only_lookup.get(date_str, {})
-
-            if store_info:
-                open_ = int(store_info.get("Open", 0 if day_of_week == 7 else 1))
-                state_holiday = str(store_info.get("StateHoliday", "0"))
-                school_holiday = int(store_info.get("SchoolHoliday", 0))
-            else:
-                # Fallback khi store không có trong test data: mặc định mở cửa
-                open_ = 1
-                state_holiday = str(date_info.get("StateHoliday", "0"))
-                school_holiday = int(date_info.get("SchoolHoliday", 0))
+            holiday_info = holiday_lookup.get(date_str, {})
+            state_holiday = str(holiday_info.get("StateHoliday", "0"))
+            school_holiday = int(holiday_info.get("SchoolHoliday", 0))
 
             record = {
-                "Store": store_key,
+                "Store": store,
                 "DayOfWeek": day_of_week,
                 "Date": date_str,
                 "Open": open_,
@@ -452,62 +405,42 @@ elif page == "🔮  Single Prediction":
                 "StateHoliday": state_holiday,
                 "SchoolHoliday": school_holiday,
             }
-
-            sh_label = {
-                "0": "None", "a": "Public Holiday", "b": "Easter", "c": "Christmas"
-            }.get(state_holiday, state_holiday)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            res_col, info_col = st.columns([1, 1.3], gap="large")
-
-            if open_ == 0:
-                # Store đóng cửa → không gọi API, trả sales = 0
+            with st.spinner("Running prediction…"):
+                preds = call_predict([record])
+            if preds:
+                st.markdown("<br>", unsafe_allow_html=True)
+                res_col, info_col = st.columns([1, 1.3], gap="large")
                 with res_col:
                     st.markdown(
                         f"""
                         <div class="result-box">
                             <div class="sub">Predicted Sales</div>
-                            <div class="big">€ 0.00</div>
-                            <div class="sub">Store {store_key} · {pred_date.strftime('%A, %d %b %Y')} — Closed</div>
+                            <div class="big">€ {preds[0]:,.2f}</div>
+                            <div class="sub">Store {store} · {pred_date.strftime('%A, %d %b %Y')}</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
                     )
                 with info_col:
-                    st.info("🔒 This store is **closed** on this date according to the test data. Sales = 0.")
-            else:
-                # Store mở cửa → gọi API dự báo
-                with st.spinner("Running prediction…"):
-                    preds = call_predict([record])
-                if preds:
-                    with res_col:
-                        st.markdown(
-                            f"""
-                            <div class="result-box">
-                                <div class="sub">Predicted Sales</div>
-                                <div class="big">€ {preds[0]:,.2f}</div>
-                                <div class="sub">Store {store_key} · {pred_date.strftime('%A, %d %b %Y')}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                    with info_col:
-                        st.markdown('<div class="section-title">Input Summary</div>', unsafe_allow_html=True)
-                        summary = pd.DataFrame(
-                            {
-                                "Field": ["Store", "Date", "Day of Week", "Open (auto)", "Promo", "State Holiday (auto)", "School Holiday (auto)"],
-                                "Value": [
-                                    store_key,
-                                    pred_date.strftime("%d %b %Y"),
-                                    DAY_LABELS[day_of_week],
-                                    "Yes",
-                                    "Active" if promo else "Inactive",
-                                    sh_label,
-                                    "Yes" if school_holiday else "No",
-                                ],
-                            }
-                        )
-                        st.dataframe(summary, hide_index=True, use_container_width=True)
+                    st.markdown('<div class="section-title">Input Summary</div>', unsafe_allow_html=True)
+                    sh_label = {
+                        "0": "None", "a": "Public Holiday", "b": "Easter", "c": "Christmas"
+                    }.get(state_holiday, state_holiday)
+                    summary = pd.DataFrame(
+                        {
+                            "Field": ["Store", "Date", "Day of Week", "Open (auto)", "Promo", "State Holiday (auto)", "School Holiday (auto)"],
+                            "Value": [
+                                store,
+                                pred_date.strftime("%d %b %Y"),
+                                DAY_LABELS[day_of_week],
+                                "No – Sunday" if day_of_week == 7 else "Yes",
+                                "Active" if promo else "Inactive",
+                                sh_label,
+                                "Yes" if school_holiday else "No",
+                            ],
+                        }
+                    )
+                    st.dataframe(summary, hide_index=True, use_container_width=True)
 
 
 # ══════════════════════════════════════════════
@@ -597,35 +530,20 @@ elif page == "📦  Batch Prediction":
                     st.error("Invalid store IDs. Enter comma-separated integers.")
                     st.stop()
 
-                gen_lookup = load_holiday_lookup()
-                gen_sdlookup = gen_lookup.get("store_date", {})
-                gen_datelookup = gen_lookup.get("date_only", {})
-
                 date_range = pd.date_range(g_start, g_end)
-                records = []
-                for sid in store_ids:
-                    for d in date_range:
-                        d_str = d.date().isoformat()
-                        dow = d.isoweekday()
-                        s_info = gen_sdlookup.get((sid, d_str), {})
-                        d_info = gen_datelookup.get(d_str, {})
-                        if s_info:
-                            open_ = int(s_info.get("Open", 1))
-                            sh = str(s_info.get("StateHoliday", "0"))
-                            sch = int(s_info.get("SchoolHoliday", 0))
-                        else:
-                            open_ = g_open
-                            sh = str(d_info.get("StateHoliday", "0"))
-                            sch = g_school
-                        records.append({
-                            "Store": sid,
-                            "DayOfWeek": dow,
-                            "Date": d_str,
-                            "Open": open_,
-                            "Promo": g_promo,
-                            "StateHoliday": sh,
-                            "SchoolHoliday": sch,
-                        })
+                records = [
+                    {
+                        "Store": sid,
+                        "DayOfWeek": d.isoweekday(),
+                        "Date": d.date().isoformat(),
+                        "Open": g_open,
+                        "Promo": g_promo,
+                        "StateHoliday": "0",
+                        "SchoolHoliday": g_school,
+                    }
+                    for sid in store_ids
+                    for d in date_range
+                ]
 
                 if len(records) > 500:
                     st.warning(f"{len(records)} records — this may take a moment.")
@@ -634,8 +552,6 @@ elif page == "📦  Batch Prediction":
                     preds = call_predict(records)
 
                 if preds:
-                    # Force 0 for closed stores
-                    preds = [p if records[i]["Open"] == 1 else 0.0 for i, p in enumerate(preds)]
                     df_gen = pd.DataFrame(records)
                     df_gen["Predicted_Sales"] = preds
 

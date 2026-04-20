@@ -112,11 +112,6 @@ class Predictor:
         features = self._align_model_columns(features, self.model)
 
         predictions_log = self.model.predict(features)
-        predictions = np.expm1(predictions_log)
+        predictions = np.exp(predictions_log)
         predictions = np.maximum(predictions, 0)
-
-        # Stores that are closed (Open=0) always have 0 sales
-        if open_values is not None:
-            predictions[open_values == 0] = 0.0
-
         return [round(float(value), 2) for value in predictions]
