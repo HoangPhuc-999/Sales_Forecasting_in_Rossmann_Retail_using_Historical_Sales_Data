@@ -28,7 +28,7 @@ st.set_page_config(
 def inject_css() -> None:
     dark = True
     page_bg    = "#0F172A" if dark else "#F4F6FB"
-    card_bg    = "#1E293B" if dark else "#FFFFFF"
+    card_bg    = "#2D1844" if dark else "#FFFFFF"
     text_col   = "#F1F5F9" if dark else "#1C1C2E"
     muted_col  = "#94A3B8" if dark else "#4B5563"
     border_col = "#334155" if dark else "#E5E7EB"
@@ -119,13 +119,13 @@ def inject_css() -> None:
 
         /* ── Result highlight ── */
         .result-box {{
-            background: linear-gradient(135deg, #FFF1F2 0%, #FFF 100%);
-            border: 2px solid #FF4D5E;
+            background: linear-gradient(135deg, #0000000 0%, #2D1844 100%);
+            border: 2px solid #E3001B;
             border-radius: 12px;
             padding: 1.4rem;
             text-align: center;
         }}
-        .result-box .big {{ font-size: 2.5rem; font-weight: 800; color: #E3001B !important; }}
+        .result-box .big {{ font-size: 2.5rem; font-weight: 800; color: #FF4D5E !important; }}
         .result-box .sub {{ color: {muted_col} !important; font-size: .9rem; margin-top: .3rem; }}
 
         /* ── Buttons ── */
