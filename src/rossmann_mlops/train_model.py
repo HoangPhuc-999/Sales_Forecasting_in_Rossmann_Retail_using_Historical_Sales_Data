@@ -65,10 +65,26 @@ def _prepare_training_columns(train_df: pd.DataFrame) -> pd.DataFrame:
         if "DayOfWeek" not in frame.columns:
             frame["DayOfWeek"] = frame["Date"].dt.weekday + 1
 
+    # Lọc bỏ các ngày cửa hàng đóng cửa (Sales=0 / Open=0).
+    # Đây là tiêu chuẩn của cuộc thi Rossmann: RMSPE chỉ tính trên ngày mở cửa.
+    # File train_final.csv trong notebook đã được lọc sẵn ở bước preprocessing trước,
+    # nhưng train_model.py đọc dữ liệu raw nên cần lọc tại đây để tránh train RMSPE bùng nổ.
+    if "Open" in frame.columns:
+        n_before = len(frame)
+        frame = frame[frame["Open"] != 0].copy()
+        logger.info("Filtered %d closed-store rows (Open=0)", n_before - len(frame))
+
+    if "Sales" in frame.columns:
+        frame["Sales"] = pd.to_numeric(frame["Sales"], errors="coerce")
+        n_before = len(frame)
+        frame = frame[frame["Sales"] > 0].copy()
+        logger.info("Filtered %d zero-sales rows (Sales=0)", n_before - len(frame))
+
     if "Sales_log" not in frame.columns:
         if "Sales" not in frame.columns:
             raise TrainingError("Training data must include either 'Sales_log' or 'Sales'")
-        frame["Sales_log"] = np.log(np.maximum(pd.to_numeric(frame["Sales"], errors="coerce"), 1.0))
+        # Sau khi đã lọc Sales > 0, dùng log trực tiếp (không cần floor 1.0 nữa)
+        frame["Sales_log"] = np.log(pd.to_numeric(frame["Sales"], errors="coerce"))
 
     _ensure_required_columns(frame, REQUIRED_TRAIN_COLUMNS, "training data")
 
@@ -89,7 +105,7 @@ import numpy as np
 def apply_feature_engineering(
     train_set: pd.DataFrame,
     val_set: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, float]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, float, dict, pd.DataFrame, dict]:
     logger.info("Computing OOF target-encoding for Train and mapping for Val")
 
     # Sao chép để tránh làm thay đổi dataframe gốc ngoài ý muốn
@@ -98,6 +114,10 @@ def apply_feature_engineering(
 
     if train_df.empty:
         raise TrainingError("Training split is empty after preprocessing")
+
+    # ------------------------------------------------------------------ #
+    # PHẦN 1: OOF TARGET ENCODING (Store_DW_Promo_Avg, Month_Avg_Sales)   #
+    # ------------------------------------------------------------------ #
 
     # 1. KHỞI TẠO OOF (Dành riêng cho Train Set)
     train_df['Store_DW_Promo_Avg'] = np.nan
@@ -140,12 +160,79 @@ def apply_feature_engineering(
 
     # 4. FILL NaN VỚI GLOBAL MEAN
     global_mean_train = float(train_df["Sales_log"].mean())
-    
+
     cols_to_fill = ["Store_DW_Promo_Avg", "Month_Avg_Sales"]
     train_df[cols_to_fill] = train_df[cols_to_fill].fillna(global_mean_train)
     val_df[cols_to_fill] = val_df[cols_to_fill].fillna(global_mean_train)
 
-    return train_df, val_df, store_dw_promo_avg_map, month_avg_map, global_mean_train
+    # ------------------------------------------------------------------ #
+    # PHẦN 2: ADVANCED FEATURE ENGINEERING (theo Cell 12 của notebook)    #
+    #   - Store_Avg_Sales  : median doanh thu theo Store                  #
+    #   - Store_DoW_Median : median doanh thu theo Store + DayOfWeek      #
+    #   - Promo_Lift       : tỉ lệ hiệu quả khuyến mãi theo Store        #
+    #   - Cyclical features: day_sin/cos, week_sin/cos                    #
+    # ------------------------------------------------------------------ #
+
+    logger.info("Computing advanced feature engineering (Store stats, Promo Lift, Cyclical features)")
+
+    # Chỉ tính trên train_df (dùng Sales gốc, không phải Sales_log)
+    if "Sales" not in train_df.columns:
+        raise TrainingError("Column 'Sales' is required for advanced feature engineering (Promo_Lift, Store_Avg_Sales)")
+
+    # A. Store Median
+    store_median: dict = train_df.groupby("Store")["Sales"].median().to_dict()
+
+    # B. Store + DayOfWeek Median
+    store_dow_stats = (
+        train_df.groupby(["Store", "DayOfWeek"])["Sales"]
+        .median()
+        .reset_index()
+        .rename(columns={"Sales": "Store_DoW_Median"})
+    )
+
+    # C. Promo Lift (median Sales khi có/không có Promo, theo từng Store)
+    promo_pivot = train_df.groupby(["Store", "Promo"])["Sales"].median().unstack()
+    promo_pivot["Promo_Lift"] = promo_pivot.get(1, pd.Series(dtype=float)) / (
+        promo_pivot.get(0, pd.Series(dtype=float)) + 1e-5
+    )
+    promo_lift_dict: dict = promo_pivot["Promo_Lift"].to_dict()
+
+    global_sales_median = float(train_df["Sales"].median())
+
+    def _apply_advanced_fe(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+
+        # Map store-level statistics
+        df["Store_Avg_Sales"] = df["Store"].map(store_median)
+        df["Promo_Lift"] = df["Store"].map(promo_lift_dict)
+        df = df.merge(store_dow_stats, on=["Store", "DayOfWeek"], how="left")
+
+        # Cyclical encoding
+        df["day_sin"] = np.sin(2 * np.pi * df["DayOfWeek"] / 7)
+        df["day_cos"] = np.cos(2 * np.pi * df["DayOfWeek"] / 7)
+        df["week_sin"] = np.sin(2 * np.pi * df["WeekOfYear"] / 52)
+        df["week_cos"] = np.cos(2 * np.pi * df["WeekOfYear"] / 52)
+
+        # Fill NaN cho store mới hoặc mapping lỗi
+        df["Store_Avg_Sales"] = df["Store_Avg_Sales"].fillna(global_sales_median)
+        df["Store_DoW_Median"] = df["Store_DoW_Median"].fillna(df["Store_Avg_Sales"])
+        df["Promo_Lift"] = df["Promo_Lift"].fillna(1.0)
+
+        return df
+
+    train_df = _apply_advanced_fe(train_df)
+    val_df = _apply_advanced_fe(val_df)
+
+    return (
+        train_df,
+        val_df,
+        store_dw_promo_avg_map,
+        month_avg_map,
+        global_mean_train,
+        store_median,
+        store_dow_stats,
+        promo_lift_dict,
+    )
 
 
 def _load_training_data(paths: dict[str, Any]) -> pd.DataFrame:
@@ -294,9 +381,20 @@ def train_pipeline(config: dict[str, Any]) -> dict[str, Any]:
     if len(train_df) == 0 or len(val_df) == 0:
         raise TrainingError("Unable to create a valid train/validation split")
 
-    train_df, val_df, store_dw_promo_mapping, month_mapping, global_mean = apply_feature_engineering(train_df, val_df)
+    (
+        train_df,
+        val_df,
+        store_dw_promo_mapping,
+        month_mapping,
+        global_mean,
+        store_median_mapping,
+        store_dow_stats_mapping,
+        promo_lift_mapping,
+    ) = apply_feature_engineering(train_df, val_df)
 
-    drop_cols = ["Sales", "Sales_log", "Customers", "Month", "Promo2", "Date", "Id"]
+    # Notebook cell 13: drop_cols = ['Sales', 'Sales_log', 'Customers']
+    # Promo2 / Date / Id are dropped defensively; Month is KEPT as a feature
+    drop_cols = ["Sales", "Sales_log", "Customers", "Promo2", "Date", "Id"]
     x_train = train_df.drop(columns=drop_cols, errors="ignore")
     x_val = val_df.drop(columns=drop_cols, errors="ignore")
     x_train, x_val = _prepare_xgb_inputs(x_train, x_val)
@@ -311,8 +409,11 @@ def train_pipeline(config: dict[str, Any]) -> dict[str, Any]:
         tree_method=training.get("tree_method", "hist"),
         n_estimators=int(training.get("n_estimators", 1000)),
         max_depth=int(training.get("max_depth", 11)),
-        learning_rate=float(training.get("learning_rate", 0.025)),
+        learning_rate=float(training.get("learning_rate", 0.02484904299575523)),
+        subsample=float(training.get("subsample", 0.8437880308889292)),
+        colsample_bytree=float(training.get("colsample_bytree", 0.7688520150734801)),
         min_child_weight=float(training.get("min_child_weight", 14)),
+        gamma=float(training.get("gamma", 0.00023429788475798095)),
         random_state=int(training.get("random_state", 42)),
         n_jobs=int(training.get("n_jobs", -1)),
     )
@@ -357,6 +458,9 @@ def train_pipeline(config: dict[str, Any]) -> dict[str, Any]:
     joblib.dump(store_dw_promo_mapping, artifacts_dir / "store_dw_promo_mapping.pkl")
     joblib.dump(month_mapping, artifacts_dir / "month_mapping.pkl")
     joblib.dump(global_mean, artifacts_dir / "global_mean_sales.pkl")
+    joblib.dump(store_median_mapping, artifacts_dir / "store_median_mapping.pkl")
+    joblib.dump(store_dow_stats_mapping, artifacts_dir / "store_dow_stats_mapping.pkl")
+    joblib.dump(promo_lift_mapping, artifacts_dir / "promo_lift_mapping.pkl")
 
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
