@@ -3,4 +3,3 @@
 ['remote "aws-remote"']
     url = s3://rossmann-project-data-2026/data
     region = ap-southeast-2
-    allow_anonymous_login = true
