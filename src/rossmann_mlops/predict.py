@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from rossmann_mlops.config import resolve_path
-from rossmann_mlops.features import build_features, merge_store_data
+from rossmann_mlops.processing import build_features, merge_store_data
 
 
 class PredictionInputError(ValueError):
@@ -49,10 +49,6 @@ class Predictor:
                 f"Missing mapping file in {resolved_artifacts_dir}: {exc}. Run training pipeline first."
             )
 
-        # Advanced mappings are produced by newer training logic.
-        self.store_median_mapping = self._safe_load_mapping(resolved_artifacts_dir / "store_median_mapping.pkl")
-        self.store_dow_stats_mapping = self._safe_load_mapping(resolved_artifacts_dir / "store_dow_stats_mapping.pkl")
-        self.promo_lift_mapping = self._safe_load_mapping(resolved_artifacts_dir / "promo_lift_mapping.pkl")
 
     @staticmethod
     def _validate_request_frame(frame: pd.DataFrame) -> None:
@@ -69,13 +65,6 @@ class Predictor:
         return data
 
     @staticmethod
-    def _safe_load_mapping(path: Path) -> Any | None:
-        try:
-            return joblib.load(path)
-        except FileNotFoundError:
-            return None
-
-    @staticmethod
     def _get_expected_columns(model: Any) -> list[str] | None:
         if hasattr(model, "feature_names_in_"):
             return list(model.feature_names_in_)
@@ -88,68 +77,6 @@ class Predictor:
                 return None
         return None
 
-    def _requires_advanced_features(self) -> bool:
-        advanced_columns = {
-            "Store_Avg_Sales",
-            "Store_DoW_Median",
-            "Promo_Lift",
-            "day_sin",
-            "day_cos",
-            "week_sin",
-            "week_cos",
-        }
-        if not self.expected_columns:
-            return False
-        return any(column in advanced_columns for column in self.expected_columns)
-
-    def _validate_advanced_mapping_availability(self) -> None:
-        if not self._requires_advanced_features():
-            return
-
-        if self.store_median_mapping is None or self.store_dow_stats_mapping is None or self.promo_lift_mapping is None:
-            raise FileNotFoundError(
-                "Model expects advanced feature mappings but one or more files are missing: "
-                "store_median_mapping.pkl, store_dow_stats_mapping.pkl, promo_lift_mapping.pkl. "
-                "Retrain model to regenerate artifacts."
-            )
-
-    def _apply_advanced_mappings(self, frame: pd.DataFrame) -> pd.DataFrame:
-        if not self._requires_advanced_features():
-            return frame
-
-        self._validate_advanced_mapping_availability()
-
-        data = frame.copy()
-
-        # Mirror training-time advanced features.
-        data["Store_Avg_Sales"] = data["Store"].map(self.store_median_mapping)
-
-        store_dow_stats = self.store_dow_stats_mapping
-        if isinstance(store_dow_stats, pd.DataFrame):
-            data = data.merge(store_dow_stats, on=["Store", "DayOfWeek"], how="left")
-        else:
-            data["Store_DoW_Median"] = np.nan
-
-        data["Promo_Lift"] = data["Store"].map(self.promo_lift_mapping)
-
-        day_of_week = pd.to_numeric(data["DayOfWeek"], errors="coerce")
-        week_of_year = pd.to_numeric(data["WeekOfYear"], errors="coerce")
-        data["day_sin"] = np.sin(2 * np.pi * day_of_week / 7)
-        data["day_cos"] = np.cos(2 * np.pi * day_of_week / 7)
-        data["week_sin"] = np.sin(2 * np.pi * week_of_year / 52)
-        data["week_cos"] = np.cos(2 * np.pi * week_of_year / 52)
-
-        global_sales_median = float(np.nanmedian(list(self.store_median_mapping.values())))
-        data["Store_Avg_Sales"] = pd.to_numeric(data["Store_Avg_Sales"], errors="coerce").fillna(global_sales_median)
-        data["Store_DoW_Median"] = pd.to_numeric(data["Store_DoW_Median"], errors="coerce").fillna(data["Store_Avg_Sales"])
-        data["Promo_Lift"] = pd.to_numeric(data["Promo_Lift"], errors="coerce").fillna(1.0)
-
-        data["day_sin"] = pd.to_numeric(data["day_sin"], errors="coerce").fillna(0.0)
-        data["day_cos"] = pd.to_numeric(data["day_cos"], errors="coerce").fillna(0.0)
-        data["week_sin"] = pd.to_numeric(data["week_sin"], errors="coerce").fillna(0.0)
-        data["week_cos"] = pd.to_numeric(data["week_cos"], errors="coerce").fillna(0.0)
-
-        return data
 
     @staticmethod
     def _align_model_columns(frame: pd.DataFrame, model: Any) -> pd.DataFrame:
@@ -182,7 +109,6 @@ class Predictor:
 
         features = build_features(merged)
         features = self._apply_mappings(features)
-        features = self._apply_advanced_mappings(features)
 
         # Restore Open (build_features drops it but the trained model requires it)
         if open_values is not None:

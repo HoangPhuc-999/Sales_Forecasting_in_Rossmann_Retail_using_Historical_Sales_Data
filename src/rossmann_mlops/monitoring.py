@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from rossmann_mlops.config import load_config, resolve_path
-from rossmann_mlops.features import CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, build_features, merge_store_data
+from rossmann_mlops.processing import CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, build_features, merge_store_data
 
 
 @dataclass(frozen=True)
