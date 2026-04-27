@@ -399,7 +399,7 @@ jobs:
 
   # Job 5: Build and Publish Docker image (Multi-platform)
   build-and-publish:
-    needs: [data-processing, model-training]
+    needs: [data-processing, monitoring-and-evaluation, model-training]
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'pull_request' && needs.model-training.outputs.should-promote == 'true' }}
 
@@ -414,6 +414,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Detect Streamlit changes
+        id: streamlit_changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            streamlit:
+              - 'app/streamlit_app.py'
+              - 'Dockerfile.streamlit'
+              - 'requirements.txt'
+              - '.dockerignore'
 
       - name: Log promotion decision
         run: |
@@ -493,8 +504,8 @@ jobs:
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:latest
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:${{ github.sha }}
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api-image
+          cache-to: type=gha,scope=api-image,mode=max
 
       - name: Build and push API image (DockerHub only)
         if: ${{ env.HAS_DOCKER_TOKEN == 'true' && env.HAS_GH_TOKEN != 'true' }}
@@ -509,8 +520,8 @@ jobs:
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:latest
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:${{ github.sha }}
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-api:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api-image
+          cache-to: type=gha,scope=api-image,mode=max
 
       - name: Build and push API image (GHCR only)
         if: ${{ env.HAS_DOCKER_TOKEN != 'true' && env.HAS_GH_TOKEN == 'true' }}
@@ -525,11 +536,11 @@ jobs:
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:latest
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:${{ github.sha }}
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-api:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api-image
+          cache-to: type=gha,scope=api-image,mode=max
 
       - name: Build and push Streamlit image (DockerHub + GHCR)
-        if: ${{ env.HAS_DOCKER_TOKEN == 'true' && env.HAS_GH_TOKEN == 'true' }}
+        if: ${{ env.HAS_DOCKER_TOKEN == 'true' && env.HAS_GH_TOKEN == 'true' && (steps.streamlit_changes.outputs.streamlit == 'true' || startsWith(github.ref, 'refs/tags/v')) }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -544,11 +555,11 @@ jobs:
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:latest
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:${{ github.sha }}
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=streamlit-image
+          cache-to: type=gha,scope=streamlit-image,mode=max
 
       - name: Build and push Streamlit image (DockerHub only)
-        if: ${{ env.HAS_DOCKER_TOKEN == 'true' && env.HAS_GH_TOKEN != 'true' }}
+        if: ${{ env.HAS_DOCKER_TOKEN == 'true' && env.HAS_GH_TOKEN != 'true' && (steps.streamlit_changes.outputs.streamlit == 'true' || startsWith(github.ref, 'refs/tags/v')) }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -560,11 +571,11 @@ jobs:
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:latest
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:${{ github.sha }}
             docker.io/${{ vars.DOCKERHUB_USERNAME }}/rossmann-mlops-streamlit:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=streamlit-image
+          cache-to: type=gha,scope=streamlit-image,mode=max
 
       - name: Build and push Streamlit image (GHCR only)
-        if: ${{ env.HAS_DOCKER_TOKEN != 'true' && env.HAS_GH_TOKEN == 'true' }}
+        if: ${{ env.HAS_DOCKER_TOKEN != 'true' && env.HAS_GH_TOKEN == 'true' && (steps.streamlit_changes.outputs.streamlit == 'true' || startsWith(github.ref, 'refs/tags/v')) }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -576,8 +587,8 @@ jobs:
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:latest
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:${{ github.sha }}
             ghcr.io/${{ steps.ghcr.outputs.repo-lc }}-streamlit:${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=streamlit-image
+          cache-to: type=gha,scope=streamlit-image,mode=max
 
       - name: Skip Docker push when credentials are missing
         if: ${{ env.HAS_DOCKER_TOKEN != 'true' && env.HAS_GH_TOKEN != 'true' }}
